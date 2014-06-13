@@ -1,0 +1,309 @@
+#!/usr/bin/env python
+
+#
+# Data logger daemon
+#
+# $Id: loggerd 44 2010-03-01 17:36:27Z dfeist $
+#
+
+#
+# Convert Python objects to MySQL column values
+#
+def python_to_mysql(pyobj):
+    # obj:   Python object (unknown objects will return NULL)
+
+    # Handle integers
+    if type(pyobj) is int:
+        myval = '%d' % pyobj
+
+    # Handle floats
+    elif type(pyobj) is float:
+        # Check for nan, +inf, -inf etc.
+        if str(pyobj) == 'nan' or str(pyobj) == 'inf' or str(pyobj) == '-inf':
+            myval = 'NULL'
+        else:
+            myval = '%.15e' % pyobj # output double precision
+
+    # Handle strings
+    elif type(pyobj) is str:
+        myval = "'%s'" % pyobj.replace("'", "\\'")
+
+    # Handle unknown types
+    else:
+        myval = 'NULL'
+
+    # Return value in MySQL format
+    return myval
+
+
+#
+# Create MySQL command for a single record
+#
+def rec_to_mysql(Record, TableName):
+    # Record:       single record structure containing all field names and values
+    # TableName:    Table name for INSERT statement
+
+    MySQLCmd = 'INSERT IGNORE INTO %s SET' % TableName
+    MySQLCmd += ' RecNbr=%d' % Record['RecNbr']
+    MySQLCmd += ", TimeOfRec=FROM_UNIXTIME(%.9f)" % pakbus.nsec_to_time(Record['TimeOfRec'])
+
+    # Loop over all fields
+    for field in Record['Fields']:
+        values = Record['Fields'][field]
+
+        # Get dimension
+        dim = len(values)
+        # Loop over all values of a field
+        for d in range(dim):
+            fieldname = field
+            if dim > 1:
+                fieldname += '(%d)' % (d + 1)
+            MySQLCmd += ', `%s`=%s' % (fieldname, python_to_mysql(values[d]))
+
+    # Return MySQL command for this record
+    return MySQLCmd
+
+
+#
+# Main program
+#
+
+# Import utility functions
+import sys
+sys.path.append('/usr/local/FTIR/lib/python')
+from ftirlib import *
+
+import pakbus, _mysql, socket, time
+
+# Start logging
+from syslog import *
+import os, sys
+openlog(os.path.basename(sys.argv[0]), 0, LOG_DAEMON)
+syslog(LOG_INFO, 'data logger daemon started')
+
+# Exit on TERM and HUP signals
+import signal
+signal.signal(signal.SIGTERM, sighandler)
+signal.signal(signal.SIGHUP, sighandler)
+
+# Parse command line arguments
+import optparse
+parser = optparse.OptionParser()
+parser.add_option('-c', '--config', help = 'read configuration from FILE [default: %default]', metavar = 'FILE', default = 'loggerd.conf')
+(options, args) = parser.parse_args()
+
+# Read configuration file
+import ConfigParser, StringIO
+cf = ConfigParser.SafeConfigParser()
+syslog(LOG_DEBUG, 'configuration read from %s' % cf.read(options.config))
+
+# Change group id
+if cf.has_option('sys', 'group'):
+    try:
+        import grp, os
+        gid = grp.getgrnam(cf.get('sys', 'group'))[2]
+        os.setgid(gid)
+        syslog(LOG_INFO, 'group id changed to %d' % gid)
+    except:
+        syslog(LOG_ERR, 'failed to change group id')
+
+# Change user id
+if cf.has_option('sys', 'user'):
+    try:
+        import pwd, os
+        uid = pwd.getpwnam(cf.get('sys', 'user'))[2]
+        os.setuid(uid)
+        syslog(LOG_INFO, 'user id changed to %d' % uid)
+    except:
+        syslog(LOG_ERR, 'failed to change user id')
+
+#
+# Main loop
+#
+
+# Data logger PakBus Node Id
+NodeId = str2int(cf.get('pakbus', 'node_id'))
+# My PakBus Node Id
+MyNodeId = str2int(cf.get('pakbus', 'my_node_id'))
+# List of data tables to process
+tables = cf.get('pakbus', 'tables').split()
+
+# Initialize TCP/IP socket
+s = None
+# Initialize database connection
+db = None
+# Initialize reference logger start time (to see if logger has been restarted)
+ref_starttime = ( None, None )
+# Initialize time of last clock check and clock check interval
+clock_check = 0
+clock_poll = cf.getint('clock', 'min_check')
+
+while True:
+
+    # Initialize list of expected next data records
+    nextrec = []
+
+    try:
+        # Open socket if necessary
+        if s is None:
+            s = pakbus.open_socket(cf.get('pakbus', 'host'), cf.getint('pakbus', 'port'), cf.getint('pakbus', 'timeout'))
+            syslog(LOG_INFO, 'connection to host %s established on port %d' % (cf.get('pakbus', 'host'), cf.getint('pakbus', 'port')))
+
+        # Check if remote node is up
+        msg = pakbus.ping_node(s, NodeId, MyNodeId)
+        if not msg:
+            raise Warning('no reply from PakBus node 0x%.3x' % NodeId)
+
+        # Synchronize data logger clock if time is past clock_check
+        if time.time() > clock_check:
+            # Get time offset and adjustment
+            tdiff, adjust = pakbus.clock_sync(s, NodeId, MyNodeId, min_adjust = cf.getfloat('clock', 'min_adj'), max_adjust = cf.getfloat('clock', 'max_adj'))
+            if tdiff is None:
+                raise Warning('could not read clock from PakBus node 0x%.3x' % NodeId)
+            else:
+                syslog(LOG_DEBUG, 'clock offset on PakBus node 0x%.3x: %+.3f seconds' % (NodeId, tdiff))
+            if adjust == 0:
+                # Double clock checking interval
+                clock_poll = min(clock_poll * 2, cf.getint('clock', 'max_check'))
+            else:
+                # Log clock adjustement and halve clock checking interval
+                syslog(LOG_INFO, 'clock on PakBus node 0x%.3x has been adjusted by %+.3f seconds' % (NodeId, adjust))
+                clock_poll = max(clock_poll / 2, cf.getint('clock', 'min_check'))
+            # Set time for next clock check
+            clock_check = time.time() + clock_poll * 60
+
+        # Get data logger start time
+        starttime = pakbus.getvalues(s, NodeId, MyNodeId, 'Status', 'NSec', 'StartTime')[0]
+        if not starttime:
+            raise Warning('could not retrieve start time from PakBus node 0x%.3x' % NodeId)
+
+        # Check if logger has been restarted
+        if starttime != ref_starttime:
+            # Clear table definitions
+            tabledef = []
+            # Clear data collection mode control structure
+            collect_mode = {}
+            # Remember start time
+            ref_starttime = starttime
+
+        # Get table definition structure
+        if not tabledef:
+            FileData, RespCode = pakbus.fileupload(s, NodeId, MyNodeId, FileName = '.TDF')
+            if FileData:
+                tabledef = pakbus.parse_tabledef(FileData)
+                syslog(LOG_INFO, 'retrieved table definitions from PakBus node 0x%.3x' % NodeId)
+            else:
+                raise Warning('could not retrieve table definitions from PakBus node 0x%.3x' % NodeId)
+
+        # Open connection to MySQL server if not (yet) connected
+        if db is None:
+            try:
+                # Connect to MySQL data base server
+                db = _mysql.connect(host = cf.get('mysql', 'host'), port = cf.getint('mysql', 'port'), user = cf.get('mysql', 'user'), passwd = cf.get('mysql', 'passwd'), db = cf.get('mysql', 'db'))
+                syslog(LOG_INFO, 'connected to database server %s as user %s' % (cf.get('mysql', 'host'), cf.get('mysql', 'user')))
+            except _mysql.MySQLError, mysqlerr:
+                raise Warning('connection to database server failed: %s' % mysqlerr)
+
+        # Collect data from all tables
+        for table in tables:
+
+            # Initialize collect structure (stores CollectMode, P1, and P2)
+            if not collect_mode.has_key(table):
+                # Get time of last entry in table
+                db.query('SELECT UNIX_TIMESTAMP(MAX(TimeOfRec)) AS lastentry FROM %s' % table)
+                result = db.store_result().fetch_row(maxrows = 0)[0][0]
+                if result:
+                    # Retrieve records newer than last entry in MySQL table until now
+                    collect_mode[table] = {'CollectMode': 0x07, 'P1': pakbus.time_to_nsec(int(result)), 'P2': pakbus.time_to_nsec(time.time())}
+                else:
+                    # Retrieve records from the beginning of the table
+                    collect_mode[table] = {'CollectMode': 0x04, 'P1': 0, 'P2': None}
+
+            # Collect data until no more records exist
+            morerecsexist = 1
+            while morerecsexist:
+
+                # Collect data
+                recdata, morerecsexist = pakbus.collect_data(s, NodeId, MyNodeId, tabledef, table, CollectMode = collect_mode[table]['CollectMode'], P1 = collect_mode[table]['P1'], P2 = collect_mode[table]['P2'], FieldNames = [])
+
+                # Move on to next table if no more data was returned
+                if not recdata:
+                    break
+
+                # Loop over all record fragments in recdata
+                for i in range(len(recdata)):
+                    # Loop over all records
+                    for j in range(recdata[i]['NbrOfRecs']):
+                        # Create MySQL command for a single record
+                        record = recdata[i]['RecFrag'][j]
+                        mysqlcmd = rec_to_mysql(record, table)
+                        try:
+                            db.query(mysqlcmd)
+                        except _mysql.Warning, mysqlerr:
+                            syslog(LOG_NOTICE, 'MySQL warning occured: %s' % mysqlerr)
+
+                # Set collect mode for this table to 0x04 (quicker and retrieves all records)
+                collect_mode[table]['CollectMode'] = 0x04
+                collect_mode[table]['P1'] = record['RecNbr'] + 1
+                collect_mode[table]['P2'] = None
+
+            # Calculate expected time of next data record for this table
+            tablenbr = pakbus.get_TableNbr(tabledef, table)
+            tblinterval = pakbus.nsec_to_time(tabledef[tablenbr - 1]['Header']['TblInterval'], epoch = 0)
+            nextrec.append(pakbus.nsec_to_time(record['TimeOfRec']) + tblinterval)
+
+    # Handle socket exceptions
+    except socket.gaierror, exc_msg:
+        syslog(LOG_CRIT, 'could not resolve remote host %s: %s' % (cf.get('pakbus', 'host'), exc_msg[1]))
+        break
+    except socket.timeout, exc_msg:
+        syslog(LOG_NOTICE, 'connection to host %s on port %d lost: %s' % (cf.get('pakbus', 'host'), cf.getint('pakbus', 'port'), exc_msg))
+
+    # Handle MySQL exceptions
+    except _mysql.MySQLError, mysqlerr:
+        # stop running SQL commands if we have lost the server connection
+        if mysqlerr[0] == 2006 or mysqlerr[0] == 2013:
+            syslog(LOG_NOTICE, 'connection to database server lost: %s' % mysqlerr)
+            db = None
+        # all other errors
+        else:
+            syslog(LOG_WARNING, 'could not send record data to database: %s' % mysqlerr)
+            syslog(LOG_DEBUG, 'failed SQL command: "%s"' % mysqlcmd)
+
+    # Handle warnings
+    except Warning, exc_msg:
+        syslog(LOG_WARNING, '%s' % exc_msg)
+
+    # Handle exit request
+    except (KeyboardInterrupt, SystemExit):
+        break
+
+    # Handle unexpected exceptions -> end program
+    except:
+        syslog(LOG_CRIT, 'exception raised: %s' % sys.exc_info()[1])
+        break
+
+    # Sleep up to 60 seconds or until next expected record (at least 10 seconds)
+    if nextrec:
+        sleep = max(10, min(nextrec) - time.time() + 10)
+    else:
+        import random
+        sleep = random.randrange(10, 60)
+    try:
+        time.sleep(sleep)
+    except (KeyboardInterrupt, SystemExit):
+        break
+
+#
+# End of main loop: clean up
+#
+
+# say good bye and close socket
+try:
+    syslog(LOG_INFO, 'PakBus node 0x%.3x detaching from PakBus node 0x%.3x' % (MyNodeId, NodeId))
+    pakbus.send(s, pakbus.pkt_bye_cmd(NodeId, MyNodeId))
+    s.close()
+except:
+    pass
+
+syslog(LOG_INFO, 'data logger daemon terminated')

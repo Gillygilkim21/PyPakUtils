@@ -1,0 +1,18 @@
+This is a more complex example code that uses PyPak for communication between a PC, a CR1000 data logger and a MySQL server. The program loggerd is intended to run in the background on the PC. It keeps the time (UTC) on the CR1000 synchronized to the PC. It also downloads data from the CR1000 data logger at regular intervals and stores it in a MySQL table.
+
+In the example application, the CR1000 stores data from several sensors inside and outside a laboratory container (both analog & digital) in 1-minute intervals. Many of these sensors are redundant to improve availability of the whole system.
+
+Directories:
+
+PC: files to be installed on the PC running PyPak
+CR1000: files to be installed on the CR1000 data logger
+MySQL: table structure for the table holding the CR1000 data
+
+IMPORTANT NOTICE:
+
+This is part of an operational application and is provided for illustration puposes only. Do not expect that these files will run on your system as they are! Especially the CR1000 program will expect certain sensors on the data logger that you do not have. Only use these files as examples for your own coding!
+
+Dietrich Feist
+Max Planck Institute for Biogeochemistry
+Jena, Germany
+2010-10-29

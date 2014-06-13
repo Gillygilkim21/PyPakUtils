@@ -1,0 +1,46 @@
+'
+' External constant definitions for WMS_FTIR.CR1
+'
+' $Id: Const.CR1 38 2009-12-11 20:50:12Z dfeist $
+'
+
+'
+' Serial command for PTB210
+'
+Const = CR = CHR(13)
+Const = LF = CHR(10)
+Const = Command = ".P" + CR + LF
+
+'
+' Calibration factors and offsets
+'
+
+' voltage -> m/s
+Const = wind_multiplier = 0.03125
+Const = wind_offset = -12.5
+
+' voltage -> % rH
+Const = humid_multiplier = 0.1
+Const = humid_offset = 0
+
+' voltage -> °C
+Const = temp_multiplier = 0.1
+Const = temp_offset = -30
+
+' voltage -> W/m^2
+Const = pyrano_multiplier = 75.1314800901577
+Const = pyrano_offset = 0
+
+'
+' Data sampling settings
+'
+
+' Scan rate [seconds]
+Const = scan_rate = 2
+
+' Data interval [seconds]
+Const = data_interval = 60
+
+' Retain time for data in ring buffer on card [days]
+Const = retain_time = 500
+

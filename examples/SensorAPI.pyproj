@@ -1,0 +1,59 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>2634d876-faa6-4caf-a5e0-73b0c6ef86b5</ProjectGuid>
+    <ProjectHome>.</ProjectHome>
+    <StartupFile>example.py</StartupFile>
+    <SearchPath>
+    </SearchPath>
+    <WorkingDirectory>.</WorkingDirectory>
+    <OutputPath>.</OutputPath>
+    <Name>SensorAPI</Name>
+    <RootNamespace>SensorAPI</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <DebugSymbols>true</DebugSymbols>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <DebugSymbols>true</DebugSymbols>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="API\Configuration.py" />
+    <Compile Include="API\Put.py" />
+    <Compile Include="API\Query.py" />
+    <Compile Include="API\QueryLast.py" />
+    <Compile Include="API\SensorAPI.py" />
+    <Compile Include="API\Suggestion.py" />
+    <Compile Include="API\Tags.py" />
+    <Compile Include="API\__init__.py" />
+    <Compile Include="Client\SensorClient.py" />
+    <Compile Include="Client\__init__.py" />
+    <Compile Include="example.py" />
+    <Compile Include="Server\run.py" />
+    <Compile Include="Server\Service\OpenTSDBService.py" />
+    <Compile Include="Server\Service\__init__.py" />
+    <Compile Include="Server\util.py" />
+    <Compile Include="Server\__init__.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="API\" />
+    <Folder Include="Client\" />
+    <Folder Include="Server\" />
+    <Folder Include="Server\Service\" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="master.json" />
+    <Content Include="server.json" />
+  </ItemGroup>
+  <PropertyGroup>
+    <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">10.0</VisualStudioVersion>
+    <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>
+    <PtvsTargetsFile>$(VSToolsPath)\Python Tools\Microsoft.PythonTools.targets</PtvsTargetsFile>
+  </PropertyGroup>
+  <Import Condition="Exists($(PtvsTargetsFile))" Project="$(PtvsTargetsFile)" />
+  <Import Condition="!Exists($(PtvsTargetsFile))" Project="$(MSBuildToolsPath)\Microsoft.Common.targets" />
+</Project>

@@ -1,0 +1,233 @@
+'''
+Idea behind everything
+
+1. get most recent entry from database
+2. get most recent value from datalogger
+3. if there is a time gap, then collect from missing time to most recent value
+
+4. loop through and put data into database once time changes (every min or so)
+
+5. if there is a failure, then save the most recent time of value from datalogger
+6. once connection reestablished, collect from missing time to most recent value
+
+7. go back to 4
+'''
+
+
+import socket
+import sys
+import pakbus
+from bintools import str2int
+
+#
+# Initialize parameters
+#
+
+# Parse command line arguments
+import optparse
+parser = optparse.OptionParser()
+parser.add_option('-c', '--config', help = 'read configuration from FILE [default: %default]', metavar = 'FILE', default = 'GilbertTest.conf')
+(options, args) = parser.parse_args()
+
+# Read configuration file
+import ConfigParser, StringIO
+cf = ConfigParser.SafeConfigParser()
+print 'configuration read from %s' % cf.read(options.config)
+
+# Data logger PakBus Node Id
+# NodeId = str2int(cf.get('pakbus', 'node_id'))
+# My PakBus Node Id
+MyNodeId = str2int(cf.get('pakbus', 'my_node_id'))
+
+# Open socket
+s = pakbus.open_socket(cf.get('pakbus', 'host'), cf.getint('pakbus', 'port'), cf.getint('pakbus', 'timeout'))
+
+
+
+
+
+
+# normal time between each update to database from datalogger tables
+database_update_time_gap = str2int(cf.get('GilbertTest', 'database_update_time_gap'))
+
+
+# list of device names
+import ast
+device_list = ast.literal_eval(cf.get('GilbertTest', 'device_list'))
+
+
+# pakbus addresses of devices
+pakbus_address_list = ast.literal_eval(cf.get('GilbertTest', 'pakbus_address'))
+
+
+
+if (len(device_list) != len(pakbus_address_list)):
+	raise Warning('"device_list" and "pakbus_address_list" must have the same length')
+
+
+'''
+import ast
+devices = ast.literal_eval(cf.get('GilbertTest', 'devices'))
+
+device_location = ast.literal_eval(cf.get('GilbertTest', 'device_location'))
+
+num_sensor = ast.literal_eval(cf.get('GilbertTest', 'num_sensor'))
+
+sensor_id = ast.literal_eval(cf.get('GilbertTest', 'sensor_id'))
+
+sensor_units = ast.literal_eval(cf.get('GilbertTest', 'sensor_units'))
+
+sensor_description = ast.literal_eval(cf.get('GilbertTest', 'sensor_description'))
+'''
+
+failed_nodes_list = []
+
+# check if all nodes are up
+for i in range(len(device_list)):
+	msg = pakbus.ping_node(s, str2int(pakbus_address_list[i]), MyNodeId)
+	if not msg:
+    	#raise Warning('no reply from PakBus node/address 0x%.3x' % device_list[i])
+		print 'no reply from PakBus node/address 0x%.3x' % pakbus_address_list[i]
+		print 'no reply from device name %s', device_list[i]
+		failed_nodes_list += [device_list[i]]
+
+
+data_store_into_table_rate = []
+sensor_name = []
+sensor_unit = []
+sensor_processing = []
+sensor_count_for_devices = []
+table_names = []
+field_count_for_tables = []
+
+for i in range(len(device_list)):
+	count = 0
+	# ignore those that you can't connect to
+	if (i not in failed_nodes_list):
+		FileData, RespCode = pakbus.fileupload(s, pakbus_address_list[i], MyNodeId, FileName = '.TDF')
+		tabledef = pakbus.parse_tabledef(FileData)
+
+		if FileData:
+			for tableno in range(1, len(tabledef) + 1):
+				# ignore tables "Public" and "Status"
+				if tabledef[tableno - 1]['Header']['TableName'] != "Public" and tabledef[tableno - 1]['Header']['TableName'] != "Status":
+					table_names += [tabledef[tableno - 1]['Header']['TableName']]
+					field_count = 0
+        			data_store_into_table_rate += [tabledef[tableno - 1]['Header']['TblInterval'][0]]
+					# get all of the sensors connected and their information
+        			for fieldno in range(1, len(tabledef[tableno - 1]['Fields']) + 1):
+						count += 1
+						field_count += 1
+						sensor_name += [tabledef[tableno - 1]['Fields'][fieldno - 1]['FieldName']]
+						sensor_unit += [tabledef[tableno - 1]['Fields'][fieldno - 1]['Units']]
+						sensor_processing += [tabledef[tableno - 1]['Fields'][fieldno - 1]['Processing']]
+					field_count_for_tables += [field_count]
+	sensor_count_for_devices += [count]
+
+print data_store_into_table_rate
+print sensor_name
+print sensor_unit
+print sensor_processing
+print field_count_for_tables
+print table_names
+
+
+from Client import *
+# create configuration for sensor client
+conf = Configuration()
+
+# create a sensor client
+client = SensorClient(conf)
+
+# create individual tags
+# tags should not have spaces
+tags = []
+count = 0
+for i in range(len(device_list)):
+	for j in range(len(sensor_count_for_devices[i])):
+		tags += [Tags(conf, device_list[i])]
+		tags[i].addTag("sensor_name", sensor_name[count])
+		tags[i].addTag("sensor_unit", sensor_unit[count])
+		tags[i].addTag("sensor_processing", sensor_processing[count])
+		count += 1
+
+# update database to contain start to end record number of all devices
+start_record_number = 12345
+end_record_number = 12350
+data_to_add_to_database = []
+count = 0
+for i in range(len(device_list)):
+	if i not in failed_nodes_list:
+		FileData, RespCode = pakbus.fileupload(s, pakbus_address_list[i], MyNodeId, FileName = '.TDF')
+		tabledef = pakbus.parse_tabledef(FileData)
+		while start_record_number < end_record_number:
+			data = pakbus.collect_data(s, pakbus_address_list[i], MyNodeId, tabledef, table_names[i], CollectMode = 0x06, P1 = start_record_number, P2 = start_record_number+1)
+			sensors = data[0][0]['RecFrag'][0]['Fields']
+			time = data[0][0]['RecFrag'][0]['TimeOfRec'][0]
+			start_record_number += 1
+			for j in range(len(sensor_counr_for_devices[i])):
+				data_to_add_to_database += [(time, sensors[sensor_name[count]], tags[count])]
+				count += 1
+			client.multiplePut(data_to_add_to_database)
+			data_to_add_to_database = []
+
+
+'''
+import time
+print time.time()
+print client.now()
+
+#update database to contain start to end time
+start_time = 770744400  # first time stamp
+while start_time < 770901885:
+	data = pakbus.collect_data(s, NodeId, MyNodeId, tabledef, 'Table', CollectMode = 0x07, P1 = start_time, P2 = start_time+sample_gap)
+	print data
+	start_time += sample_gap
+	time = data[0][0]['RecFrag'][0]['TimeOfRec'][0]
+	sensors = data[0][0]['RecFrag'][0]['Fields']
+	# put function will return a state string
+
+	put_data = [sensors['BattV'][0], sensors['AirTC_2'][0], sensors['Rain_mm_Tot'][0], sensors['Temp_C'][0], \
+		sensors['WindDir'][0], sensors['SlrMJ_Tot'][0], sensors['SlrkW'][0], sensors['WS_ms'][0], \
+		sensors['RH_2'][0], sensors['Lvl_m'][0], sensors['PTemp_C'][0]]
+	####print client.multiplePut(time, put_data)
+	#print client.singlePut(time, sensors['BattV'][0], BattV)
+	#print client.singlePut(time, sensors['AirTC_2'][0], AirTC)
+	#print client.singlePut(time, sensors['Rain_mm_Tot'][0], Rain_mm)
+	#print client.singlePut(time, sensors['Temp_C'][0], WaterTemp)
+	#print client.singlePut(time, sensors['WindDir'][0], WindDir)
+	#print client.singlePut(time, sensors['SlrMJ_Tot'][0], SlrMJ_Tot)
+	#print client.singlePut(time, sensors['SlrkW'][0], SlrkW)
+	#print client.singlePut(time, sensors['WS_ms'][0], WindSpeed)
+	#print client.singlePut(time, sensors['RH_2'][0], Rel_Hum)
+	#print client.singlePut(time, sensors['Lvl_m'][0], WaterLevel)
+	#print client.singlePut(time, sensors['PTemp_C'][0], PanelTemp)
+
+# infinite loop to constantly collect data every minute
+while True:	
+	time.sleep(time_gap-0.865349040031)
+	count = 0
+	while count < 4:
+		data = pakbus.collect_data(s, NodeId, MyNodeId, tabledef, 'Table', CollectMode = 0x07, P1 = start_time, P2 = start_time+sample_gap)
+		start_time += sample_gap
+		count += 1
+
+
+#always check that most recent input is 15 sec before next input
+
+
+print '\n'
+# query data
+start = client.now() - 2000000
+print client.singleQuery(start, client.now(), BattV)
+
+'''
+
+
+
+# say good bye
+pkt = pakbus.pkt_bye_cmd(NodeId, MyNodeId)
+pakbus.send(s, pkt)
+
+# close socket
+s.close()

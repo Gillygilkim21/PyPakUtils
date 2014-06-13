@@ -1,0 +1,212 @@
+'
+' CR-Basic program for CR1000 data logger in MPI-BGC FTIR container
+'
+' $Id: WMS_FTIR.CR1 38 2009-12-11 20:50:12Z dfeist $
+'
+
+' Original version by: Hendrik Zoephel, Max Planck Institute for Biogeochemistry, Jena, Germany, 2008
+' Final version by: Dietrich Feist, Max Planck Institute for Biogeochemistry, Jena, Germany
+
+' Data Logger & Peripherals: Campbell Scientific CR1000, NL115
+
+' Sensors:
+'
+' outdoor humidity and temperature: 2 x KPC 1/6-ME (Galltec)
+' wind speed: 2 x 14577 (Lambrecht)
+' atmospheric pressure: 2 x PTB210 (Vaisala)
+' global radiadation: 1 x CMP3 (Kipp&Zonen)
+' FTIR temperature: 2 x T107 (Campbell)
+' indoor humidity and temperature: 2 x CS215 (Campbell Sci.)
+
+' Channel usage:
+'
+' SE1: T107
+' SE2: T107
+' DIFF2: CMP3
+' DIFF3: 14577
+' DIFF4: 14577
+' DIFF5: KPC 1/6-ME (humidity)
+' DIFF6: KPC 1/6-ME (humidity)
+' DIFF7: KPC 1/6-ME (temperature)
+' DIFF8: KPC 1/6-ME (temperature)
+' COM1: PTB210
+' COM2: PTB210
+' COM5: CS215
+' COM7: CS215
+
+'
+' Load calibration and other constants
+'
+Include "CPU:Const.CR1"
+
+'
+' Declare public variables
+'
+
+' Output parameters
+Public T(2)                     ' Temperature (outside)
+Public RH(2)                    ' Relative humidity (outside)
+Public VWind(2)                 ' Wind speed (outside)
+Public P(2)                     ' Ambient pressure (outside)
+Public GRad(1)                  ' Global radiation (outside)
+Public T_indoor                 ' Temperature inside container
+Public RH_indoor                ' Relative humidity inside container
+Public T_dome                   ' Temperature in solar tracker dome
+Public RH_dome                  ' Relative humidity in solar tracker dome
+Public T_FTIR(2)                ' Temperature inside FTIR instrument
+Public N                        ' Total number of samples in interval
+
+' Auxiliary variables
+Public PTB210(2) As String * 10 ' Output string from PTB210 sensor
+Public CS215_5(2)               ' Output from CS215 sensor on Com5
+Public CS215_7(2)               ' Output from CS215 sensor on Com7
+Public Count                    ' Running cound for number of samples in interval
+
+'
+' Define physical units for output parameters
+'
+
+Units T_indoor = deg C
+Units RH_indoor = % RH
+Units T_dome = deg C
+Units RH_dome = % RH
+Units T_FTIR = deg C
+Units VWind = m/s
+Units RH = % RH
+Units T = deg C
+Units GRad = W/m^2
+Units P = hPa
+
+'
+' Table definition: sensors
+'
+DataTable(sensors, True, -1)
+
+    ' Define data sampling interval
+    DataInterval(0, data_interval, Sec, 10)
+
+    ' Use file on card as extended ring buffer
+    CardOut(0, retain_time * 86400 / data_interval)
+
+    ' Outside temperature
+    Average(2, T(1), IEEE4, 0)
+    FieldNames("T(2)")
+    Minimum(2, T(1), IEEE4, 0, 0)
+    Maximum(2, T(1), IEEE4, 0, 0)
+
+    ' Outside relative humidity
+    Average(2, RH(1), IEEE4, 0)
+    FieldNames("RH(2)")
+    Minimum(2, RH(1), IEEE4, 0, 0)
+    Maximum(2, RH(1), IEEE4, 0, 0)
+
+    ' Wind speed
+    Average(2, VWind(1), IEEE4, 0)
+    FieldNames("VWind(2)")
+    Minimum(2, VWind(1), IEEE4, 0, 0)
+    Maximum(2, VWind(1), IEEE4, 0, 0)
+
+    ' Outside ambient pressure
+    Average(2, P(1), IEEE4, 0)
+    FieldNames("P(2)")
+    Minimum(2, P(1), IEEE4, 0, 0)
+    Maximum(2, P(1), IEEE4, 0, 0)
+
+    ' Global radiation
+    Average(1, GRad, IEEE4, 0)
+    FieldNames("GRad")
+    Minimum(1, GRad, IEEE4, 0, 0)
+    Maximum(1, GRad, IEEE4, 0, 0)
+
+    ' Temperature inside FTIR instrument
+    Average(2, T_FTIR(1), IEEE4, 0)
+    FieldNames("T_FTIR(2)")
+
+    ' Temperature & humidity inside container
+    Average(1, T_indoor, IEEE4, False)
+    FieldNames("T_indoor")
+    Average(1, RH_indoor, IEEE4, False)
+    FieldNames("RH_indoor")
+
+    ' Temperature & humidity inside solar tracker dome
+    Average(1, T_dome, IEEE4, False)
+    FieldNames("T_dome")
+    Average(1, RH_dome, IEEE4, False)
+    FieldNames("RH_dome")
+
+    ' Number of samples
+    Sample(1, N, UInt2)
+
+EndTable
+
+'
+' Main program
+'
+BeginProg
+
+    ' Set scan rate
+    Scan(scan_rate, Sec, 0, 0)
+
+    '
+    ' Receive pressure data from digital Vaisala PTB210 sensors
+    '
+
+    ' Set communication parameters for PTB210
+    SerialOpen(Com1, 9600, 10, 0, 0)
+    SerialOpen(Com2, 9600, 10, 0, 0)
+
+    ' Send command string to PTB210
+    SerialOut(Com1, Command, "", 0, 100)
+    SerialOut(Com2, Command, "", 0, 100)
+
+    ' Receive serial data as string from PTB210
+    SerialIn(PTB210(1), Com1, 100, 10, 10)
+    SerialIn(PTB210(2), Com2, 100, 10, 10)
+
+    ' Convert strings to numeric values
+    P(1) = PTB210(1)
+    P(2) = PTB210(2)
+
+    '
+    ' Receive temperature and humidity from digital Campbell Scientific CS215 sensors
+    '
+
+    ' Indoor sensor connected to serial port 5
+    SDI12Recorder(CS215_5(), 5, "0", "R!", 1, 0)
+    T_indoor = CS215_5(1)
+    RH_indoor = CS215_5(2)
+
+    ' Dome sensor connected to serial port 7
+    SDI12Recorder(CS215_7(), 7, "0", "R!", 1, 0)
+    T_dome = CS215_7(1)
+    RH_dome = CS215_7(2)
+
+    '
+    ' Receive data from analog sensors
+    '
+
+    ' Convert voltages to physical units
+    VoltDiff(T(1), 2, mV2500, 7, True, 0, _50Hz, temp_multiplier, temp_offset)
+    VoltDiff(RH(1), 2, mV2500, 5, True, 0, _50Hz, humid_multiplier, humid_offset)
+    VoltDiff(VWind(1), 2, mV2500, 3, True, 0, _50Hz, wind_multiplier, wind_offset)
+    VoltDiff(GRad(1), 1, mV25, 2, True, 0, _50Hz, pyrano_multiplier, pyrano_offset)
+    Therm107(T_FTIR(1), 2, 1, Vx1, 0, _50Hz, 1, 0)
+
+    '
+    ' Count number of samples per interval
+    '
+    Count = Count + 1
+    N = Count
+    If TimeIntoInterval(0, data_interval, sec) Then
+        Count = 0
+    EndIf
+
+    '
+    ' Create new row in data table(s)
+    '
+    CallTable(sensors)
+
+    ' Repeat main loop
+    NextScan
+
+EndProg
