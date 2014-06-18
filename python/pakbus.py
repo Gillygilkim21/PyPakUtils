@@ -68,6 +68,28 @@ if not vars().has_key('transact'):
     transact = 0     # Running 8-bit transaction counter (initialized only if it does not exist)
 
 
+def pak_str(pkt):
+    """dump a pakbus message to a human readable string
+    assumes leading/trailing BD bytes are trimmed off
+    """
+    
+    
+    
+            
+        
+
+#
+# Send packet over PakBus
+#
+# - add signature nullifier
+# - quote \xBC and \xBD characters
+# - frame packet with \xBD characters
+#
+def frame(pkt):
+    # s: socket object
+    # pkt: unquoted, unframed PakBus packet (just header + message)
+    return '\xBD' + quote(pkt + calcSigNullifier(calcSigFor(pkt))) + '\xBD'
+
 #
 # Send packet over PakBus
 #
@@ -78,6 +100,8 @@ if not vars().has_key('transact'):
 def send(s, pkt):
     # s: socket object
     # pkt: unquoted, unframed PakBus packet (just header + message)
+    
+    print "sending", decode_pkt(pkt)
     frame = quote(pkt + calcSigNullifier(calcSigFor(pkt)))
     s.send('\xBD' + frame + '\xBD')
 
@@ -121,6 +145,24 @@ def newTranNbr():
 # [1] section 1.3 PakBus Packet Headers
 #
 ################################################################################
+
+
+#
+# Generate PakBus header
+#
+def Link_hdr(DstPhyAddr, SrcPhyAddr, ExpMoreCode = 0x2, LinkState = 0xA, Priority = 0x1, HopCnt = 0x0):
+    # DstPhyAddr:  Address where this packet is going (12 bits)
+    # SrcPhyAddr:  Address of the node that sent the packet (12 bits)
+    # ExpMoreCode: Whether client should expect another packet (2 bits)
+    # LinkState:   Link state (4 bits)
+    # Priority:    Message priority on the network (2 bits) 
+
+    # bitwise encoding of header fields
+    return struct.pack('>2H',
+        (LinkState & 0xF) << 12   | (DstPhyAddr & 0xFFF),
+        (ExpMoreCode & 0x3) << 14 | (Priority & 0x3) << 12 | (SrcPhyAddr & 0xFFF))    
+    
+
 
 #
 # Generate PakBus header
@@ -1076,21 +1118,26 @@ def decode_pkt(pkt):
     msg = {'MsgType': None, 'TranNbr': None, 'raw': None}
 
     try:
-        # decode PakBus header
-        rawhdr = struct.unpack('>4H', pkt[0:8]) # raw header bits
+            
+        # decode link header
+        rawhdr = struct.unpack('>2H', pkt[0:4]) # raw header bits
         hdr['LinkState']   =  rawhdr[0] >> 12
         hdr['DstPhyAddr']  =  rawhdr[0] & 0x0FFF
         hdr['ExpMoreCode'] = (rawhdr[1] & 0xC000) >> 14
         hdr['Priority']    = (rawhdr[1] & 0x3000) >> 12
         hdr['SrcPhyAddr']  =  rawhdr[1] & 0x0FFF
-        hdr['HiProtoCode'] =  rawhdr[2] >> 12
-        hdr['DstNodeId']   =  rawhdr[2] & 0x0FFF
-        hdr['HopCnt']      =  rawhdr[3] >> 12
-        hdr['SrcNodeId']   =  rawhdr[3] & 0x0FFF
-
-        # decode default message fields: raw message, message type and transaction number
-        msg['raw'] = pkt[8:]
-        [msg['MsgType'], msg['TranNbr']], size = decode_bin(('Byte', 'Byte'), msg['raw'][:2])
+        
+        if len(pkt) > 8:
+            # decode PakBus header
+            rawhdr = struct.unpack('>2H', pkt[0:8]) # raw header bits        
+            hdr['HiProtoCode'] =  rawhdr[0] >> 12
+            hdr['DstNodeId']   =  rawhdr[0] & 0x0FFF
+            hdr['HopCnt']      =  rawhdr[1] >> 12
+            hdr['SrcNodeId']   =  rawhdr[1] & 0x0FFF
+    
+            # decode default message fields: raw message, message type and transaction number
+            msg['raw'] = pkt[8:]
+            [msg['MsgType'], msg['TranNbr']], size = decode_bin(('Byte', 'Byte'), msg['raw'][:2])
     except:
         pass
 
